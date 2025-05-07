@@ -1,0 +1,176 @@
+#include <Wire.h>
+#include <MPU6050_light.h>
+
+// === Motor driver pins ===
+// Front
+#define IN1 22
+#define IN2 23
+#define IN3 24
+#define IN4 25
+#define ENA 6
+#define ENB 7
+
+// Middle
+#define IN5 26
+#define IN6 27
+#define IN7 28
+#define IN8 29
+#define ENA2 8
+#define ENB2 9
+
+// Rear
+#define IN9 30
+#define IN10 31
+#define IN11 32
+#define IN12 33
+#define ENA3 10
+#define ENB3 11
+
+// Metal detector signal pin
+#define METAL_DETECT_PIN 2
+
+MPU6050 mpu(Wire);
+float yaw = 0;
+
+int zigzagCount = 4;                  // Number of zigzag columns
+unsigned long forwardDuration = 3000; // Forward time per column (~2 meters)
+
+void setup() {
+  Serial.begin(9600);
+  Wire.begin();
+
+  // Motor setup
+  for (int pin = 22; pin <= 33; pin++) {
+    pinMode(pin, OUTPUT);
+  }
+  pinMode(ENA, OUTPUT); pinMode(ENB, OUTPUT);
+  pinMode(ENA2, OUTPUT); pinMode(ENB2, OUTPUT);
+  pinMode(ENA3, OUTPUT); pinMode(ENB3, OUTPUT);
+
+  analogWrite(ENA, 255); analogWrite(ENB, 255);
+  analogWrite(ENA2, 255); analogWrite(ENB2, 255);
+  analogWrite(ENA3, 255); analogWrite(ENB3, 255);
+
+  // Metal detect pin
+  pinMode(METAL_DETECT_PIN, INPUT);
+
+  // IMU Setup
+  byte status = mpu.begin();
+  if (status != 0) {
+    Serial.print("MPU6050 failed. Code: ");
+    Serial.println(status);
+    while (1);
+  }
+
+  mpu.calcOffsets(); // Keep rover still during this
+  delay(1000);
+}
+
+void loop() {
+  for (int i = 0; i < zigzagCount * 2; i++) {
+    // Move forward while checking for metal
+    moveForwardWithMetalCheck(forwardDuration);
+    stopMotors();
+    delay(500);
+
+    if (i < zigzagCount * 2 - 1) {
+      if (i % 2 == 0) {
+        turnRight90();
+      } else {
+        turnLeft90();
+      }
+      delay(500);
+    }
+  }
+
+  stopMotors();
+  while (1); // Done
+}
+
+void moveForwardWithMetalCheck(unsigned long duration) {
+  unsigned long startTime = millis();
+
+  while (millis() - startTime < duration) {
+    moveForward();
+
+    if (digitalRead(METAL_DETECT_PIN) == HIGH) {
+      Serial.println("Metal detected! Slowing down...");
+      stopMotors();
+      delay(5000); // Pause for 5 seconds
+      Serial.println("Resuming...");
+    }
+
+    delay(50); // Check every 50ms
+  }
+
+  stopMotors();
+}
+
+void moveForward() {
+  digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
+  digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
+  digitalWrite(IN5, HIGH); digitalWrite(IN6, LOW);
+  digitalWrite(IN7, HIGH); digitalWrite(IN8, LOW);
+  digitalWrite(IN9, HIGH); digitalWrite(IN10, LOW);
+  digitalWrite(IN11, HIGH); digitalWrite(IN12, LOW);
+}
+
+void stopMotors() {
+  for (int pin = 22; pin <= 33; pin++) {
+    digitalWrite(pin, LOW);
+  }
+}
+
+void turnRight90() {
+  mpu.update();
+  float startYaw = mpu.getAngleZ();
+  float targetYaw = startYaw + 90;
+
+  Serial.print("Turning Right: from ");
+  Serial.print(startYaw);
+  Serial.print(" to ");
+  Serial.println(targetYaw);
+
+  while (mpu.getAngleZ() < targetYaw - 2) { // 2° margin
+    mpu.update();
+    turnRight();
+  }
+  stopMotors();
+}
+
+void turnLeft90() {
+  mpu.update();
+  float startYaw = mpu.getAngleZ();
+  float targetYaw = startYaw - 90;
+
+  Serial.print("Turning Left: from ");
+  Serial.print(startYaw);
+  Serial.print(" to ");
+  Serial.println(targetYaw);
+
+  while (mpu.getAngleZ() > targetYaw + 2) {
+    mpu.update();
+    turnLeft();
+  }
+  stopMotors();
+}
+
+void turnRight() {
+  digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);   // Left front fwd
+  digitalWrite(IN5, HIGH); digitalWrite(IN6, LOW);   // Left mid fwd
+  digitalWrite(IN9, HIGH); digitalWrite(IN10, LOW);  // Left rear fwd
+
+  digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH);   // Right front back
+  digitalWrite(IN7, LOW); digitalWrite(IN8, HIGH);   // Right mid back
+  digitalWrite(IN11, LOW); digitalWrite(IN12, HIGH); // Right rear back
+}
+
+void turnLeft() {
+  digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH);   // Left front back
+  digitalWrite(IN5, LOW); digitalWrite(IN6, HIGH);   // Left mid back
+  digitalWrite(IN9, LOW); digitalWrite(IN10, HIGH);  // Left rear back
+
+  digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);   // Right front fwd
+  digitalWrite(IN7, HIGH); digitalWrite(IN8, LOW);   // Right mid fwd
+  digitalWrite(IN11, HIGH); digitalWrite(IN12, LOW); // Right rear fwd
+}
