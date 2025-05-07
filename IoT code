@@ -1,0 +1,111 @@
+#include <SoftwareSerial.h>
+#include <TinyGPS++.h>
+#include <ESP8266WiFi.h>
+#include "Adafruit_MQTT.h"
+#include "Adafruit_MQTT_Client.h"
+
+// WiFi Config
+#define WIFI_SSID       "Devout's Device"
+#define WIFI_PASS       "pot pass"
+
+// Adafruit IO Config
+#define AIO_SERVER      "io.adafruit.com"
+#define AIO_SERVERPORT  1883
+#define AIO_USERNAME    "xxxxxxxxxx"
+#define AIO_KEY         "xxxxxxxxxxxxxxxxxxxxxx"
+
+// Pins
+#define METAL_SENSOR_PIN D5
+SoftwareSerial gpsSerial(D6, D7); // RX, TX for GPS
+TinyGPSPlus gps;
+
+// MQTT setup
+WiFiClient client;
+Adafruit_MQTT_Client mqtt(&client, AIO_SERVER, AIO_SERVERPORT, AIO_USERNAME, AIO_KEY);
+
+// Feeds
+Adafruit_MQTT_Publish roverPath = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/rover-path");
+Adafruit_MQTT_Publish metalLocation = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/metal-location");
+
+// Timing
+unsigned long lastLocationSent = 0;
+const unsigned long locationInterval = 10000; // 10 seconds
+
+void setup() {
+  Serial.begin(9600);
+  gpsSerial.begin(9600);
+  pinMode(METAL_SENSOR_PIN, INPUT);
+
+  // WiFi
+  Serial.print("Connecting to WiFi...");
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println(" connected!");
+
+  // MQTT
+  connectToAdafruit();
+}
+
+void loop() {
+  if (WiFi.status() != WL_CONNECTED) {
+    reconnectWiFi();
+  }
+
+  while (gpsSerial.available() > 0) {
+    gps.encode(gpsSerial.read());
+  }
+
+  if (!mqtt.connected()) {
+    connectToAdafruit();
+  }
+  mqtt.processPackets(1000);
+  mqtt.ping();
+
+  // Log path every 10 seconds
+  if (gps.location.isValid() && millis() - lastLocationSent >= locationInterval) {
+    float lat = gps.location.lat();
+    float lon = gps.location.lng();
+
+    String gpsData = String(lat, 6) + "," + String(lon, 6);
+    Serial.print("Sending location: "); Serial.println(gpsData);
+    roverPath.publish(gpsData.c_str());
+    lastLocationSent = millis();
+  }
+
+  // Check for metal detection
+  if (digitalRead(METAL_SENSOR_PIN) == HIGH && gps.location.isValid()) {
+    float lat = gps.location.lat();
+    float lon = gps.location.lng();
+
+    String message = "Metal Detected at Lat: " + String(lat, 6) + ", Lon: " + String(lon, 6);
+    Serial.println(message);
+    metalLocation.publish(message.c_str());
+
+    delay(5000); // debounce metal detection
+  }
+}
+
+void connectToAdafruit() {
+  int8_t ret;
+  Serial.print("Connecting to Adafruit IO... ");
+  while ((ret = mqtt.connect()) != 0) {
+    Serial.println(mqtt.connectErrorString(ret));
+    Serial.println("Retrying in 5 seconds...");
+    mqtt.disconnect();
+    delay(5000);
+  }
+  Serial.println("Connected!");
+}
+
+void reconnectWiFi() {
+  Serial.println("WiFi lost. Reconnecting...");
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("Reconnected to WiFi.");
+}
